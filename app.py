@@ -416,7 +416,7 @@ else:
             if not item.get('eval_temps'):
                 item['eval_temps'] = [20.0]
 
-            # Build Multi-Temperature Table with perfectly aligned column order
+            # Build Multi-Temperature Table safely
             y1_row = db_y1[(db_y1['Spec No.'].astype(str).str.strip() == str(spec).strip()) & (db_y1['Type/Grade'].astype(str).str.strip() == str(grade).strip())]
             as_row = db_as[(db_as['Spec No.'].astype(str).str.strip() == str(spec).strip()) & (db_as['Type/Grade'].astype(str).str.strip() == str(grade).strip())]
 
@@ -426,4 +426,5 @@ else:
                     s_val = get_row_stress_at_temp(record, temp_cols, t)
                 else:
                     if not as_row.empty:
-                        s_val = get_row_stress_at_temp(as_row.iloc)
+                        s_val = get_row_stress_at_temp(as_row.iloc[0], temp_cols, t)
+          
