@@ -67,12 +67,10 @@ def load_data(file_path):
     db_tcd = pd.read_excel(file_path, sheet_name='DB_TCD', dtype=str)
     db_tm = pd.read_excel(file_path, sheet_name='DB_TM', dtype=str)
     
-    # Fix DB_MAP headers from row 0
     db_map_raw = pd.read_excel(file_path, sheet_name='DB_MAP', dtype=str)
     db_map_raw.columns = db_map_raw.iloc[0]
     db_map = db_map_raw[1:].reset_index(drop=True)
     
-    # Clean any datetime conversion artifacts in Type/Grade columns
     for df in [db_as, db_y1, db_map]:
         if 'Type/Grade' in df.columns:
             df['Type/Grade'] = df['Type/Grade'].apply(lambda x: x.strftime('%b-%d').upper() if isinstance(x, (datetime.datetime, datetime.date, pd.Timestamp)) else str(x).strip())
@@ -351,7 +349,6 @@ else:
             ext_chart = record.get([c for c in record.index if 'Ext' in str(c)][0], '-') if [c for c in record.index if 'Ext' in str(c)] else '-'
             notes = record.get([c for c in record.index if 'Note' in str(c)][0], '-') if [c for c in record.index if 'Note' in str(c)] else '-'
 
-            # Lookup Groups from DB_MAP safely
             te_group, tcd_group, tm_group, poisson, density = 'Group 1', 'Group A', 'C<=0.3%', 0.3, 7850
             if not db_map.empty:
                 map_spec_col = [c for c in db_map.columns if 'Spec' in str(c)][0] if [c for c in db_map.columns if 'Spec' in str(c)] else db_map.columns[2]
@@ -378,7 +375,6 @@ else:
                     poisson = float(matched_map.iloc[0].get("Poisson's\nRatio", 0.3)) if pd.notnull(matched_map.iloc[0].get("Poisson's\nRatio")) else 0.3
                     density = float(matched_map.iloc[0].get("Density\nkg/m3", 7850)) if pd.notnull(matched_map.iloc[0].get("Density\nkg/m3")) else 7850
 
-            # --- COMPACT SPACE-SAVING METADATA GRID ---
             r1_c1, r1_c2, r1_c3, r1_c4, r1_c5 = st.columns(5)
             with r1_c1: render_meta_item("Nominal Comp.", str(nom_comp))
             with r1_c2: render_meta_item("Product Form", str(prod_form))
@@ -395,28 +391,30 @@ else:
 
             st.markdown("---")
 
-            # --- DYNAMIC TEMPERATURE EVALUATION INPUT FOR THIS MATERIAL ---
+            # --- DYNAMIC TEMPERATURE EVALUATION INPUT ---
             st.markdown("#### 🎯 Evaluate at Additional Temperature(s)")
+            temp_key = f"temp_input_{idx}"
+            
             col_t1, col_t2 = st.columns([3, 1])
             with col_t1:
-                new_temp_input = st.text_input("Enter Temperature(s) in °C (comma-separated)", key=f"temp_input_{idx}", placeholder="e.g. 150, 250, 350")
+                new_temp_input = st.text_input("Enter Temperature(s) in °C (comma-separated)", key=temp_key, placeholder="e.g. 150, 250, 350")
             with col_t2:
                 st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-                if st.button("Evaluate Temp", key=f"eval_btn_{idx}"):
-                    try:
-                        parsed_temps = [float(t.strip()) for t in new_temp_input.split(',') if t.strip().replace('.','',1).isdigit()]
-                        for pt in parsed_temps:
-                            if pt not in item['eval_temps']:
-                                item['eval_temps'].append(pt)
-                        st.success("Added temperature evaluation!")
-                        st.rerun()
-                    except Exception:
-                        st.error("Invalid temperature format.")
+                eval_clicked = st.button("Evaluate Temp", key=f"eval_btn_{idx}")
+
+            if eval_clicked and new_temp_input:
+                try:
+                    parsed_temps = [float(t.strip()) for t in new_temp_input.split(',') if t.strip().replace('.','',1).isdigit()]
+                    for pt in parsed_temps:
+                        if pt not in item['eval_temps']:
+                            item['eval_temps'].append(pt)
+                except Exception:
+                    st.error("Invalid temperature format.")
 
             if not item.get('eval_temps'):
                 item['eval_temps'] = [20.0]
 
-            # Build Multi-Temperature Table safely
+            # Build Multi-Temperature Table
             y1_row = db_y1[(db_y1['Spec No.'].astype(str).str.strip() == str(spec).strip()) & (db_y1['Type/Grade'].astype(str).str.strip() == str(grade).strip())]
             as_row = db_as[(db_as['Spec No.'].astype(str).str.strip() == str(spec).strip()) & (db_as['Type/Grade'].astype(str).str.strip() == str(grade).strip())]
 
@@ -427,4 +425,9 @@ else:
                 else:
                     if not as_row.empty:
                         s_val = get_row_stress_at_temp(as_row.iloc[0], temp_cols, t)
-          
+                    else:
+                        s_val = 'N/A (Table 3)'
+
+                y_val = get_row_stress_at_temp(y1_row.iloc[0], temp_cols, t) if not y1_row.empty else '-'
+                
+                e_i = interpolate_prop(db_tm, 'T (˚C)', 'E', t, 'TM GR.
