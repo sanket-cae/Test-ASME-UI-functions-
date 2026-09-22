@@ -426,4 +426,4 @@ else:
                     s_val = get_row_stress_at_temp(record, temp_cols, t)
                 else:
                     if not as_row.empty:
-                        s_val = get_row_stress_at_temp(as_row.iloc
+                        s_val = get_row_stress_at_temp(as_row.iloc)
