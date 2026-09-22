@@ -430,4 +430,4 @@ else:
 
                 y_val = get_row_stress_at_temp(y1_row.iloc[0], temp_cols, t) if not y1_row.empty else '-'
                 
-                e_i = interpolate_prop(db_tm, 'T (˚C)', 'E', t, 'TM GR.
+                e_i = interpolate_prop(db_tm, 'T (˚C)', 'E', t, 'TM GR.')
