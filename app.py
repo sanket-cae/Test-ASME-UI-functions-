@@ -234,12 +234,11 @@ try:
 except Exception as e:
     pass
 
-# --- ROBUST INTERPOLATION HELPERS (Case-Insensitive Column Mapping) ---
+# --- ROBUST INTERPOLATION HELPERS ---
 def interpolate_prop(df, temp_col_target, val_col_target, target, group_col_target=None, group_val=None):
     if df.empty:
         return '-'
     
-    # Find actual column names case-insensitively
     cols_lower = {str(c).strip().lower(): c for c in df.columns}
     temp_col = cols_lower.get(str(temp_col_target).strip().lower())
     val_col = cols_lower.get(str(val_col_target).strip().lower())
@@ -424,4 +423,6 @@ else:
                     else:
                         s_val = 'N/A (Table 3)'
 
-                y_val = get_row_stress_a
+                y_val = get_row_stress_at_temp(y1_row.iloc[0], temp_cols, t) if not y1_row.empty else '-'
+                
+ 
