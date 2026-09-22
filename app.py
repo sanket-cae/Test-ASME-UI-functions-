@@ -5,8 +5,8 @@ import datetime
 
 # Page configuration
 st.set_page_config(
-    page_title="ASME Sec II Part D Property Viewer (Test)",
-    page_icon="🧪",
+    page_title="ASME Sec II Part D Property Viewer",
+    page_icon="⚙️",
     layout="wide"
 )
 
@@ -50,10 +50,10 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🧪 ASME Section II, Part D — Test Workspace")
-st.markdown("Testing environment for bidirectional material search (`DB_AS` + `DB_Y1`), historical stacking, and dynamic evaluations.")
+st.title("⚙️ ASME Section II, Part D Material Property Database")
+st.markdown("Interactive engineering workspace for material property lookups, historical stacking, and dynamic temperature evaluations.")
 
-# Load Excel Database
+# Load Excel Database (Cleaning dates and ensuring string formats)
 @st.cache_data
 def load_data(file_path):
     xls = pd.ExcelFile(file_path)
@@ -63,10 +63,12 @@ def load_data(file_path):
     db_tcd = pd.read_excel(file_path, sheet_name='DB_TCD', dtype=str)
     db_tm = pd.read_excel(file_path, sheet_name='DB_TM', dtype=str)
     
+    # Fix DB_MAP headers from row 0
     db_map_raw = pd.read_excel(file_path, sheet_name='DB_MAP', dtype=str)
     db_map_raw.columns = db_map_raw.iloc[0]
     db_map = db_map_raw[1:].reset_index(drop=True)
     
+    # Clean any datetime conversion artifacts in Type/Grade columns
     for df in [db_as, db_y1, db_map]:
         if 'Type/Grade' in df.columns:
             df['Type/Grade'] = df['Type/Grade'].apply(lambda x: x.strftime('%b-%d').upper() if isinstance(x, (datetime.datetime, datetime.date, pd.Timestamp)) else str(x).strip())
@@ -83,11 +85,12 @@ except Exception as e:
     st.error(f"Error loading Excel file: {e}. Please ensure 'ASME SecII Part D.xlsx' is uploaded in your repository.")
     st.stop()
 
-if 'test_history' not in st.session_state:
-    st.session_state.test_history = []
+# Initialize session state for history stacking
+if 'history' not in st.session_state:
+    st.session_state.history = []
 
 # --- SIDEBAR INPUTS (BIDIRECTIONAL SEARCH) ---
-st.sidebar.markdown("### 🎛️ Test Configuration Panel")
+st.sidebar.markdown("### 🎛️ Configuration Panel")
 
 with st.sidebar.expander("1. Code & Material Selection", expanded=True):
     code_section_map = {
@@ -100,6 +103,7 @@ with st.sidebar.expander("1. Code & Material Selection", expanded=True):
     selected_section_label = st.selectbox("Applicability (Code Section)", list(code_section_map.keys()))
     db_column_name = code_section_map[selected_section_label]
 
+    # Combine unique specs and grades from BOTH DB_AS and DB_Y1 for maximum coverage
     all_specs = sorted(list(set(
         [str(s).strip() for s in db_as['Spec No.'].dropna().unique() if str(s).strip() != 'nan'] +
         [str(s).strip() for s in db_y1['Spec No.'].dropna().unique() if str(s).strip() != 'nan']
@@ -114,6 +118,8 @@ with st.sidebar.expander("1. Code & Material Selection", expanded=True):
 
     if search_mode == "By Spec No. first":
         selected_spec = st.selectbox("Specification Number (Spec No.)", all_specs)
+        
+        # Filter grades available under this Spec No. from either DB_AS or DB_Y1
         spec_grades = sorted(list(set(
             db_as[db_as['Spec No.'].str.strip() == selected_spec]['Type/Grade'].dropna().astype(str).str.strip().tolist() +
             db_y1[db_y1['Spec No.'].str.strip() == selected_spec]['Type/Grade'].dropna().astype(str).str.strip().tolist()
@@ -121,12 +127,15 @@ with st.sidebar.expander("1. Code & Material Selection", expanded=True):
         selected_grade = st.selectbox("Type / Grade", spec_grades if spec_grades else all_grades)
     else:
         selected_grade = st.selectbox("Type / Grade", all_grades)
+        
+        # Filter specs available under this Grade from either DB_AS or DB_Y1
         grade_specs = sorted(list(set(
             db_as[db_as['Type/Grade'].str.strip() == selected_grade]['Spec No.'].dropna().astype(str).str.strip().tolist() +
             db_y1[db_y1['Type/Grade'].str.strip() == selected_grade]['Spec No.'].dropna().astype(str).str.strip().tolist()
         )))
         selected_spec = st.selectbox("Specification Number (Spec No.)", grade_specs if grade_specs else all_specs)
 
+    # Alloy / UNS options
     combined_db = pd.concat([db_as, db_y1], ignore_index=True)
     filtered_uns_df = combined_db[(combined_db['Spec No.'].str.strip() == selected_spec) & (combined_db['Type/Grade'].str.strip() == selected_grade)]
     uns_col = [c for c in filtered_uns_df.columns if 'Alloy' in str(c) or 'UNS' in str(c)]
@@ -136,7 +145,7 @@ with st.sidebar.expander("1. Code & Material Selection", expanded=True):
         filtered_uns = sorted([str(u).strip() for u in filtered_uns_df[uns_col[0]].dropna().unique() if str(u).strip() not in ['nan', '…', '']])
     selected_uns = st.selectbox("Alloy Designation / UNS No.", ['All'] + filtered_uns)
 
-# Pre-lookup fixed constants
+# Pre-lookup fixed material constants (Density & Poisson's Ratio)
 sidebar_poisson, sidebar_density = 0.3, 7850.0
 if not db_map.empty:
     map_spec_col = [c for c in db_map.columns if 'Spec' in str(c)][0] if [c for c in db_map.columns if 'Spec' in str(c)] else db_map.columns[2]
@@ -160,6 +169,7 @@ if not db_map.empty:
         sidebar_poisson = float(matched_map_sb.iloc[0].get("Poisson's\nRatio", 0.3)) if pd.notnull(matched_map_sb.iloc[0].get("Poisson's\nRatio")) else 0.3
         sidebar_density = float(matched_map_sb.iloc[0].get("Density\nkg/m3", 7850)) if pd.notnull(matched_map_sb.iloc[0].get("Density\nkg/m3")) else 7850
 
+# Check variant / record availability in DB_AS (with fallback to DB_Y1 if not in DB_AS)
 variant_df = db_as[(db_as['Spec No.'].str.strip() == selected_spec) & (db_as['Type/Grade'].str.strip() == selected_grade)].copy()
 source_sheet_used = "DB_AS"
 if variant_df.empty:
@@ -195,8 +205,9 @@ with st.sidebar.expander("2. Variant & Initial Temp", expanded=True):
     initial_temp = st.number_input("Initial Target Temp (°C)", value=20.0, step=25.0)
 
 st.sidebar.markdown("---")
-if st.sidebar.button("🔍 Test Run & Add to History", type="primary", use_container_width=True):
+if st.sidebar.button("🔍 Find Properties & Add to History", type="primary", use_container_width=True):
     record = variant_df[variant_df['Variant_No'] == selected_variant].iloc[0]
+    
     history_item = {
         'spec': selected_spec,
         'grade': selected_grade,
@@ -207,8 +218,9 @@ if st.sidebar.button("🔍 Test Run & Add to History", type="primary", use_conta
         'source': source_sheet_used,
         'eval_temps': [initial_temp]
     }
-    st.session_state.test_history.insert(0, history_item)
+    st.session_state.history.insert(0, history_item)
 
+# --- DISPLAY FIXED CONSTANTS BELOW FIND PROPERTIES BUTTON IN SIDEBAR ---
 st.sidebar.markdown("### 📌 Material Constants")
 st.sidebar.markdown(
     f"""<div class="sidebar-constant-box">
@@ -218,7 +230,22 @@ st.sidebar.markdown(
     unsafe_allow_html=True
 )
 
-# Interpolation helpers
+# Download Database Button in Sidebar
+st.sidebar.markdown("### 📥 Database Export")
+try:
+    with open(excel_file, "rb") as f:
+        excel_bytes = f.read()
+    st.sidebar.download_button(
+        label="Download Master Excel File",
+        data=excel_bytes,
+        file_name="ASME SecII Part D.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
+except Exception as e:
+    pass
+
+# --- INTERPOLATION HELPERS ---
 def interpolate_prop(df, temp_col, val_col, target, group_col=None, group_val=None):
     sub_df = df
     if group_col and group_val:
@@ -274,26 +301,30 @@ def render_meta_item(title, value):
         </div>
     """, unsafe_allow_html=True)
 
-if not st.session_state.test_history:
-    st.info("👈 Use the sidebar in test mode to search by Spec No. or Grade, then click **'Test Run & Add to History'**.")
+# --- DISPLAY MATERIAL HISTORY STACK ---
+if not st.session_state.history:
+    st.info("👈 Please configure your material selection in the sidebar and click **'Find Properties & Add to History'**.")
 else:
-    st.markdown("### 📚 Test History Stack")
-    if st.button("🗑️ Clear Test History"):
-        st.session_state.test_history = []
+    st.markdown("### 📚 Evaluated Material History (Click any material card to expand/collapse)")
+    
+    if st.button("🗑️ Clear All History"):
+        st.session_state.history = []
         st.rerun()
 
-    for idx, item in enumerate(st.session_state.test_history):
+    for idx, item in enumerate(st.session_state.history):
         spec = item['spec']
         grade = item['grade']
+        uns = item['uns']
         section = item['section']
         variant = item['variant']
         record = item['record']
         source = item['source']
         
+        db_col = code_section_map[section]
         t_col_name = [c for c in record.index if 'Tensile' in str(c)]
         tensile = record.get(t_col_name[0], '-') if t_col_name else '-'
         
-        card_label = f"🧪 Test [{idx+1}] **Spec:** {spec} | **Grade:** {grade} | **Source:** {source} | **Section:** {section}"
+        card_label = f"📦 [{idx+1}] **Spec:** {spec} | **Grade:** {grade} | **Source:** {source} | **Section:** {section} (Min. Tensile: {tensile} MPa)"
         
         with st.expander(card_label, expanded=(idx == 0)):
             nom_comp = record.get([c for c in record.index if 'Nominal' in str(c)][0], '-') if [c for c in record.index if 'Nominal' in str(c)] else '-'
@@ -303,23 +334,82 @@ else:
             y_col_name = [c for c in record.index if 'Yield' in str(c)]
             min_yield = record.get(y_col_name[0], '-') if y_col_name else '-'
             
-            raw_temp_limit = record.get(code_section_map[section], 'NP') if source == 'DB_AS' else '-'
+            raw_temp_limit = record.get(db_col, 'NP') if source == 'DB_AS' else '-'
             max_temp_limit = f"{raw_temp_limit} °C" if pd.notnull(raw_temp_limit) and str(raw_temp_limit).strip() not in ['NP', '-', ''] else str(raw_temp_limit)
             
             ext_chart = record.get([c for c in record.index if 'Ext' in str(c)][0], '-') if [c for c in record.index if 'Ext' in str(c)] else '-'
             notes = record.get([c for c in record.index if 'Note' in str(c)][0], '-') if [c for c in record.index if 'Note' in str(c)] else '-'
 
+            # Lookup Groups from DB_MAP safely
+            te_group, tcd_group, tm_group, poisson, density = 'Group 1', 'Group A', 'C<=0.3%', 0.3, 7850
+            if not db_map.empty:
+                map_spec_col = [c for c in db_map.columns if 'Spec' in str(c)][0] if [c for c in db_map.columns if 'Spec' in str(c)] else db_map.columns[2]
+                map_grade_col = [c for c in db_map.columns if 'Grade' in str(c) or 'Type' in str(c)][0] if [c for c in db_map.columns if 'Grade' in str(c) or 'Type' in str(c)] else db_map.columns[3]
+                
+                matched_map = pd.DataFrame()
+                for _, m_row in db_map.iterrows():
+                    m_spec = str(m_row.get(map_spec_col, '')).strip()
+                    m_grade = str(m_row.get(map_grade_col, '')).strip()
+                    if m_spec == str(spec).strip() and m_grade == str(grade).strip():
+                        matched_map = pd.DataFrame([m_row.to_dict()])
+                        break
+                if matched_map.empty:
+                    for _, m_row in db_map.iterrows():
+                        m_spec = str(m_row.get(map_spec_col, '')).strip()
+                        if m_spec == str(spec).strip():
+                            matched_map = pd.DataFrame([m_row.to_dict()])
+                            break
+
+                if not matched_map.empty:
+                    te_group = matched_map.iloc[0].get('Table TE Group', 'Group 1')
+                    tcd_group = matched_map.iloc[0].get('Table TCD Group', 'Group A')
+                    tm_group = matched_map.iloc[0].get('Table TM Group', 'C<=0.3%')
+                    poisson = float(matched_map.iloc[0].get("Poisson's\nRatio", 0.3)) if pd.notnull(matched_map.iloc[0].get("Poisson's\nRatio")) else 0.3
+                    density = float(matched_map.iloc[0].get("Density\nkg/m3", 7850)) if pd.notnull(matched_map.iloc[0].get("Density\nkg/m3")) else 7850
+
+            # --- COMPACT SPACE-SAVING METADATA GRID ---
             r1_c1, r1_c2, r1_c3, r1_c4, r1_c5 = st.columns(5)
             with r1_c1: render_meta_item("Nominal Comp.", str(nom_comp))
             with r1_c2: render_meta_item("Product Form", str(prod_form))
             with r1_c3: render_meta_item("Class / Cond.", str(class_cond))
             with r1_c4: render_meta_item("Size / Thick.", str(size_thick))
-            with r1_c5: render_meta_item("Min. Tensile", f"{tensile} MPa")
+            with r1_c5: render_meta_item("Min. Tensile", f"{float(tensile):.3f} MPa" if pd.notnull(tensile) and str(tensile).replace('.','',1).isdigit() else "-")
 
             r2_c1, r2_c2, r2_c3, r2_c4, r2_c5 = st.columns(5)
-            with r2_c1: render_meta_item("Min. Yield", f"{min_yield} MPa")
+            with r2_c1: render_meta_item("Min. Yield", f"{float(min_yield):.3f} MPa" if pd.notnull(min_yield) and str(min_yield).replace('.','',1).isdigit() else "-")
             with r2_c2: render_meta_item("Max Temp Limit", str(max_temp_limit))
             with r2_c3: render_meta_item("Ext. Chart No.", str(ext_chart))
-            with r2_c4: render_meta_item("Source Sheet", source)
-            with r2_c5: render_meta_item("Notes", str(notes))
-    
+            with r2_c4: render_meta_item("Property Groups", f"TE: {te_group} | TCD: {tcd_group} | TM: {tm_group}")
+            with r2_c5: render_meta_item("Notes", str(notes) if pd.notnull(notes) else "-")
+
+            st.markdown("---")
+
+            # --- DYNAMIC TEMPERATURE EVALUATION INPUT FOR THIS MATERIAL ---
+            st.markdown("#### 🎯 Evaluate at Additional Temperature(s)")
+            col_t1, col_t2 = st.columns([3, 1])
+            with col_t1:
+                new_temp_input = st.text_input("Enter Temperature(s) in °C (comma-separated)", key=f"temp_input_{idx}", placeholder="e.g. 150, 250, 350")
+            with col_t2:
+                st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                if st.button("Evaluate Temp", key=f"eval_btn_{idx}"):
+                    try:
+                        parsed_temps = [float(t.strip()) for t in new_temp_input.split(',') if t.strip().replace('.','',1).isdigit()]
+                        for pt in parsed_temps:
+                            if pt not in item['eval_temps']:
+                                item['eval_temps'].append(pt)
+                        st.success("Added temperature evaluation!")
+                        st.rerun()
+                    except Exception:
+                        st.error("Invalid temperature format.")
+
+            # Build Multi-Temperature Table
+            y1_row = db_y1[(db_y1['Spec No.'].astype(str).str.strip() == str(spec).strip()) & (db_y1['Type/Grade'].astype(str).str.strip() == str(grade).strip())]
+            as_row = db_as[(db_as['Spec No.'].astype(str).str.strip() == str(spec).strip()) & (db_as['Type/Grade'].astype(str).str.strip() == str(grade).strip())]
+
+            multi_temp_records = []
+            for t in sorted(item['eval_temps']):
+                s_val = get_row_stress_at_temp(record, temp_cols, t) if source == 'DB_AS' else ('N/A (Table 3)' if not as_row.empty else get_row_stress_at_temp(as_row.iloc[0], temp_cols, t))
+                y_val = get_row_stress_at_temp(y1_row.iloc[0], temp_cols, t) if not y1_row.empty else '-'
+                e_i = interpolate_prop(db_tm, 'T (˚C)', 'E', t, 'TM GR.', tm_group)
+                tc_i = interpolate_prop(db_tcd, 'T (˚C)', 'TC', t, 'TCD GR.', tcd_group)
+             
