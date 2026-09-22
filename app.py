@@ -85,7 +85,6 @@ except Exception as e:
     st.error(f"Error loading Excel file: {e}. Please ensure 'ASME SecII Part D.xlsx' is uploaded in your repository.")
     st.stop()
 
-# Initialize session state for history stacking
 if 'history' not in st.session_state:
     st.session_state.history = []
 
@@ -103,7 +102,6 @@ with st.sidebar.expander("1. Code & Material Selection", expanded=True):
     selected_section_label = st.selectbox("Applicability (Code Section)", list(code_section_map.keys()))
     db_column_name = code_section_map[selected_section_label]
 
-    # Combine unique specs and grades from BOTH DB_AS and DB_Y1 for maximum coverage
     all_specs = sorted(list(set(
         [str(s).strip() for s in db_as['Spec No.'].dropna().unique() if str(s).strip() != 'nan'] +
         [str(s).strip() for s in db_y1['Spec No.'].dropna().unique() if str(s).strip() != 'nan']
@@ -118,8 +116,6 @@ with st.sidebar.expander("1. Code & Material Selection", expanded=True):
 
     if search_mode == "By Spec No. first":
         selected_spec = st.selectbox("Specification Number (Spec No.)", all_specs)
-        
-        # Filter grades available under this Spec No. from either DB_AS or DB_Y1
         spec_grades = sorted(list(set(
             db_as[db_as['Spec No.'].str.strip() == selected_spec]['Type/Grade'].dropna().astype(str).str.strip().tolist() +
             db_y1[db_y1['Spec No.'].str.strip() == selected_spec]['Type/Grade'].dropna().astype(str).str.strip().tolist()
@@ -127,15 +123,12 @@ with st.sidebar.expander("1. Code & Material Selection", expanded=True):
         selected_grade = st.selectbox("Type / Grade", spec_grades if spec_grades else all_grades)
     else:
         selected_grade = st.selectbox("Type / Grade", all_grades)
-        
-        # Filter specs available under this Grade from either DB_AS or DB_Y1
         grade_specs = sorted(list(set(
             db_as[db_as['Type/Grade'].str.strip() == selected_grade]['Spec No.'].dropna().astype(str).str.strip().tolist() +
             db_y1[db_y1['Type/Grade'].str.strip() == selected_grade]['Spec No.'].dropna().astype(str).str.strip().tolist()
         )))
         selected_spec = st.selectbox("Specification Number (Spec No.)", grade_specs if grade_specs else all_specs)
 
-    # Alloy / UNS options
     combined_db = pd.concat([db_as, db_y1], ignore_index=True)
     filtered_uns_df = combined_db[(combined_db['Spec No.'].str.strip() == selected_spec) & (combined_db['Type/Grade'].str.strip() == selected_grade)]
     uns_col = [c for c in filtered_uns_df.columns if 'Alloy' in str(c) or 'UNS' in str(c)]
@@ -145,7 +138,7 @@ with st.sidebar.expander("1. Code & Material Selection", expanded=True):
         filtered_uns = sorted([str(u).strip() for u in filtered_uns_df[uns_col[0]].dropna().unique() if str(u).strip() not in ['nan', '…', '']])
     selected_uns = st.selectbox("Alloy Designation / UNS No.", ['All'] + filtered_uns)
 
-# Pre-lookup fixed material constants (Density & Poisson's Ratio)
+# Pre-lookup fixed material constants
 sidebar_poisson, sidebar_density = 0.3, 7850.0
 if not db_map.empty:
     map_spec_col = [c for c in db_map.columns if 'Spec' in str(c)][0] if [c for c in db_map.columns if 'Spec' in str(c)] else db_map.columns[2]
@@ -169,7 +162,6 @@ if not db_map.empty:
         sidebar_poisson = float(matched_map_sb.iloc[0].get("Poisson's\nRatio", 0.3)) if pd.notnull(matched_map_sb.iloc[0].get("Poisson's\nRatio")) else 0.3
         sidebar_density = float(matched_map_sb.iloc[0].get("Density\nkg/m3", 7850)) if pd.notnull(matched_map_sb.iloc[0].get("Density\nkg/m3")) else 7850
 
-# Check variant / record availability in DB_AS (with fallback to DB_Y1 if not in DB_AS)
 variant_df = db_as[(db_as['Spec No.'].str.strip() == selected_spec) & (db_as['Type/Grade'].str.strip() == selected_grade)].copy()
 source_sheet_used = "DB_AS"
 if variant_df.empty:
@@ -207,7 +199,6 @@ with st.sidebar.expander("2. Variant & Initial Temp", expanded=True):
 st.sidebar.markdown("---")
 if st.sidebar.button("🔍 Find Properties & Add to History", type="primary", use_container_width=True):
     record = variant_df[variant_df['Variant_No'] == selected_variant].iloc[0]
-    
     history_item = {
         'spec': selected_spec,
         'grade': selected_grade,
@@ -220,7 +211,6 @@ if st.sidebar.button("🔍 Find Properties & Add to History", type="primary", us
     }
     st.session_state.history.insert(0, history_item)
 
-# --- DISPLAY FIXED CONSTANTS BELOW FIND PROPERTIES BUTTON IN SIDEBAR ---
 st.sidebar.markdown("### 📌 Material Constants")
 st.sidebar.markdown(
     f"""<div class="sidebar-constant-box">
@@ -230,7 +220,6 @@ st.sidebar.markdown(
     unsafe_allow_html=True
 )
 
-# Download Database Button in Sidebar
 st.sidebar.markdown("### 📥 Database Export")
 try:
     with open(excel_file, "rb") as f:
@@ -245,20 +234,39 @@ try:
 except Exception as e:
     pass
 
-# --- INTERPOLATION HELPERS ---
-def interpolate_prop(df, temp_col, val_col, target, group_col=None, group_val=None):
-    sub_df = df
-    if group_col and group_val:
-        sub_df = df[df[group_col].astype(str).str.strip() == str(group_val).strip()].copy()
+# --- ROBUST INTERPOLATION HELPERS (Case-Insensitive Column Mapping) ---
+def interpolate_prop(df, temp_col_target, val_col_target, target, group_col_target=None, group_val=None):
+    if df.empty:
+        return '-'
+    
+    # Find actual column names case-insensitively
+    cols_lower = {str(c).strip().lower(): c for c in df.columns}
+    temp_col = cols_lower.get(str(temp_col_target).strip().lower())
+    val_col = cols_lower.get(str(val_col_target).strip().lower())
+    
+    if not temp_col or not val_col:
+        return '-'
+    
+    sub_df = df.copy()
+    if group_col_target and group_val:
+        group_cols_lower = {str(c).strip().lower(): c for c in df.columns}
+        g_col = group_cols_lower.get(str(group_col_target).strip().lower())
+        if g_col:
+            sub_df = sub_df[sub_df[g_col].astype(str).str.strip() == str(group_val).strip()]
+            
     if sub_df.empty:
         return '-'
+        
     sub_df[temp_col] = pd.to_numeric(sub_df[temp_col], errors='coerce')
     sub_df[val_col] = pd.to_numeric(sub_df[val_col], errors='coerce')
     sub_df = sub_df.dropna(subset=[temp_col, val_col]).sort_values(by=temp_col)
+    
     if sub_df.empty:
         return '-'
+        
     temps = sub_df[temp_col].values
     vals = sub_df[val_col].values
+    
     if target in temps:
         return vals[np.where(temps == target)[0][0]]
     elif target < temps[0] or target > temps[-1]:
@@ -402,7 +410,7 @@ else:
                     except Exception:
                         st.error("Invalid temperature format.")
 
-                        # Build Multi-Temperature Table (Safe handling for Table 3 / DB_Y1 fallback)
+            # Build Multi-Temperature Table with robust group column detection
             y1_row = db_y1[(db_y1['Spec No.'].astype(str).str.strip() == str(spec).strip()) & (db_y1['Type/Grade'].astype(str).str.strip() == str(grade).strip())]
             as_row = db_as[(db_as['Spec No.'].astype(str).str.strip() == str(spec).strip()) & (db_as['Type/Grade'].astype(str).str.strip() == str(grade).strip())]
 
@@ -411,38 +419,9 @@ else:
                 if source == 'DB_AS':
                     s_val = get_row_stress_at_temp(record, temp_cols, t)
                 else:
-                    # If material came from DB_Y1 (Table 3), check if DB_AS has a matching stress row
                     if not as_row.empty:
                         s_val = get_row_stress_at_temp(as_row.iloc[0], temp_cols, t)
                     else:
                         s_val = 'N/A (Table 3)'
 
-                y_val = get_row_stress_at_temp(y1_row.iloc[0], temp_cols, t) if not y1_row.empty else '-'
-                e_i = interpolate_prop(db_tm, 'T (˚C)', 'E', t, 'TM GR.', tm_group)
-                tc_i = interpolate_prop(db_tcd, 'T (˚C)', 'TC', t, 'TCD GR.', tcd_group)
-                td_i = interpolate_prop(db_tcd, 'T (˚C)', 'TD', t, 'TCD GR.', tcd_group)
-                a_i = interpolate_prop(db_te, 'T (˚C)', 'A', t, 'TE GROUP', te_group)
-                b_i = interpolate_prop(db_te, 'T (˚C)', 'B', t, 'TE GROUP', te_group)
-
-                cp_i = '-'
-                try:
-                    if isinstance(tc_i, (int, float)) and isinstance(td_i, (int, float)) and td_i > 0 and density:
-                        cp_i = (tc_i * (10**6)) / (float(density) * td_i)
-                except Exception:
-                    cp_i = '-'
-
-                multi_temp_records.append({
-                    'Temp (°C)': t,
-                    'Allowable Stress (MPa)': round(s_val, 3) if isinstance(s_val, (int, float)) else s_val,
-                    'Yield Strength (MPa)': round(y_val, 3) if isinstance(y_val, (int, float)) else y_val,
-                    'Modulus E (GPa)': round(e_i, 3) if isinstance(e_i, (int, float)) else e_i,
-                    'Poisson Ratio (–)': round(poisson, 3),
-                    'Density (kg/m³)': round(density, 3),
-                    'Thermal Cond. TC (W/m·°C)': round(tc_i, 3) if isinstance(tc_i, (int, float)) else tc_i,
-                    'Thermal Diff. TD (10⁻⁶ m²/s)': round(td_i, 3) if isinstance(td_i, (int, float)) else td_i,
-                    'Specific Heat Cp (J/kg·°C)': round(cp_i, 3) if isinstance(cp_i, (int, float)) else cp_i,
-                    'Thermal Exp. A (mm/mm/°C)': f"{a_i:.3e}" if isinstance(a_i, (int, float)) else a_i,
-                    'Thermal Exp. B (mm/mm/°C)': f"{b_i:.3e}" if isinstance(b_i, (int, float)) else b_i,
-                })
-
-                
+                y_val = get_row_stress_a
