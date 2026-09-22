@@ -333,7 +333,8 @@ else:
         t_col_name = [c for c in record.index if 'Tensile' in str(c)]
         tensile = record.get(t_col_name[0], '-') if t_col_name else '-'
         
-        card_label = f"📦 [{idx+1}] **Spec:** {spec} | **Grade:** {grade} | **Source:** {source} | **Section:** {section} (Min. Tensile: {tensile} MPa)"
+        # Updated card label featuring Variant Number explicitly
+        card_label = f"📦 [{idx+1}] **Spec:** {spec} | **Grade:** {grade} | **Variant:** {variant} | **Source:** {source} | **Section:** {section} (Min. Tensile: {tensile} MPa)"
         
         with st.expander(card_label, expanded=(idx == 0)):
             nom_comp = record.get([c for c in record.index if 'Nominal' in str(c)][0], '-') if [c for c in record.index if 'Nominal' in str(c)] else '-'
@@ -428,97 +429,4 @@ else:
                     else:
                         s_val = 'N/A (Table 3)'
 
-                y_val = get_row_stress_at_temp(y1_row.iloc[0], temp_cols, t) if not y1_row.empty else '-'
-                
-                e_i = interpolate_prop(db_tm, 'T (˚C)', 'E', t, 'TM GR.', tm_group)
-                tc_i = interpolate_prop(db_tcd, 'T (˚C)', 'TC', t, 'TCD GR.', tcd_group)
-                td_i = interpolate_prop(db_tcd, 'T (˚C)', 'TD', t, 'TCD GR.', tcd_group)
-                a_i = interpolate_prop(db_te, 'T (˚C)', 'A', t, 'TE GROUP', te_group)
-                b_i = interpolate_prop(db_te, 'T (˚C)', 'B', t, 'TE GROUP', te_group)
-
-                cp_i = '-'
-                try:
-                    if isinstance(tc_i, (int, float)) and isinstance(td_i, (int, float)) and td_i > 0 and density:
-                        cp_i = (tc_i * (10**6)) / (float(density) * td_i)
-                except Exception:
-                    cp_i = '-'
-
-                multi_temp_records.append({
-                    'Temp (°C)': t,
-                    'Allowable Stress (MPa)': round(s_val, 3) if isinstance(s_val, (int, float)) else s_val,
-                    'Yield Strength (MPa)': round(y_val, 3) if isinstance(y_val, (int, float)) else y_val,
-                    'Modulus E (GPa)': round(e_i, 3) if isinstance(e_i, (int, float)) else e_i,
-                    'Poisson Ratio (–)': round(poisson, 3),
-                    'Density (kg/m³)': round(density, 3),
-                    'Thermal Cond. TC (W/m·°C)': round(tc_i, 3) if isinstance(tc_i, (int, float)) else tc_i,
-                    'Thermal Diff. TD (10⁻⁶ m²/s)': round(td_i, 3) if isinstance(td_i, (int, float)) else td_i,
-                    'Specific Heat Cp (J/kg·°C)': round(cp_i, 3) if isinstance(cp_i, (int, float)) else cp_i,
-                    'Thermal Exp. A (mm/mm/°C)': f"{a_i:.3e}" if isinstance(a_i, (int, float)) else a_i,
-                    'Thermal Exp. B (mm/mm/°C)': f"{b_i:.3e}" if isinstance(b_i, (int, float)) else b_i,
-                })
-
-            st.dataframe(pd.DataFrame(multi_temp_records), use_container_width=True)
-
-            # Sub-tabs for Full Breakdown and Trend
-            sub_tab1, sub_tab2 = st.tabs(["📑 Full Temperature Breakdown", "📈 Trend Graph"])
-            
-            with sub_tab1:
-                if temp_cols:
-                    stress_values = [record.get(t, 'NP') for t in temp_cols] if source == 'DB_AS' else ['-'] * len(temp_cols)
-                    yield_values = [y1_row.iloc[0].get(t, '-') if not y1_row.empty else '-' for t in temp_cols]
-                    te_a_v, te_b_v, tc_v, td_v, cp_v, e_v = [], [], [], [], [], []
-
-                    for t_str in temp_cols:
-                        try:
-                            t_num = float(t_str)
-                        except ValueError:
-                            continue
-                        a_v = interpolate_prop(db_te, 'T (˚C)', 'A', t_num, 'TE GROUP', te_group)
-                        b_v = interpolate_prop(db_te, 'T (˚C)', 'B', t_num, 'TE GROUP', te_group)
-                        te_a_v.append(f"{a_v:.3e}" if isinstance(a_v, (int, float)) else a_v)
-                        te_b_v.append(f"{b_v:.3e}" if isinstance(b_v, (int, float)) else b_v)
-
-                        tc_item = interpolate_prop(db_tcd, 'T (˚C)', 'TC', t_num, 'TCD GR.', tcd_group)
-                        td_item = interpolate_prop(db_tcd, 'T (˚C)', 'TD', t_num, 'TCD GR.', tcd_group)
-                        tc_v.append(round(tc_item, 3) if isinstance(tc_item, (int, float)) else tc_item)
-                        td_v.append(round(td_item, 3) if isinstance(td_item, (int, float)) else td_item)
-
-                        try:
-                            if isinstance(tc_item, (int, float)) and isinstance(td_item, (int, float)) and td_item > 0 and density:
-                                cp_v.append(round((tc_item * (10**6)) / (float(density) * td_item), 3))
-                            else:
-                                cp_v.append('-')
-                        except Exception:
-                            cp_v.append('-')
-
-                        e_item = interpolate_prop(db_tm, 'T (˚C)', 'E', t_num, 'TM GR.', tm_group)
-                        e_v.append(round(e_item, 3) if isinstance(e_item, (int, float)) else e_item)
-
-                    valid_temp_cols = [t for t in temp_cols if str(t).strip().replace('.', '', 1).isdigit()]
-                    full_df = pd.DataFrame({
-                        'Temp (°C)': valid_temp_cols[:len(e_v)],
-                        'Allowable Stress (MPa)': stress_values[:len(e_v)],
-                        'Yield Strength (MPa)': yield_values[:len(e_v)],
-                        'Modulus E (GPa)': e_v,
-                        'Poisson Ratio (–)': round(poisson, 3),
-                        'Density (kg/m³)': round(density, 3),
-                        'Thermal Cond. TC (W/m·°C)': tc_v,
-                        'Thermal Diff. TD (10⁻⁶ m²/s)': td_v,
-                        'Specific Heat Cp (J/kg·°C)': cp_v,
-                        'Thermal Exp. A (mm/mm/°C)': te_a_v,
-                        'Thermal Exp. B (mm/mm/°C)': te_b_v,
-                    })
-                    st.dataframe(full_df, use_container_width=True, height=300)
-
-            with sub_tab2:
-                if temp_cols and 'full_df' in locals() and not full_df.empty:
-                    chart_metric = st.selectbox("Select Property to Plot:", ['Allowable Stress (MPa)', 'Yield Strength (MPa)', 'Modulus E (GPa)', 'Thermal Cond. TC (W/m·°C)', 'Specific Heat Cp (J/kg·°C)'], key=f"chart_{idx}")
-                    plot_df = full_df[['Temp (°C)', chart_metric]].copy()
-                    plot_df['Temp (°C)'] = pd.to_numeric(plot_df['Temp (°C)'], errors='coerce')
-                    plot_df[chart_metric] = pd.to_numeric(plot_df[chart_metric], errors='coerce')
-                    plot_df = plot_df.dropna().sort_values('Temp (°C)')
-
-                    if not plot_df.empty:
-                        st.line_chart(plot_df.set_index('Temp (°C)')[chart_metric], use_container_width=True)
-                    else:
-                        st.info("No numeric data available to plot.")
+              
